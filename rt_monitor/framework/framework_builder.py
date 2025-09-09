@@ -148,11 +148,13 @@ class FrameworkBuilder:
                 except (SyntaxError, AttributeError, NameError, TypeError, ValueError):
                     logger.error(f"The module for component [ {device_name} ] contains invalid python syntax.")
                     raise ComponentsSpecificationError()
-                except ModuleNotFoundError:
+                except ModuleNotFoundError as e:
                     logger.error(f"Module for component [ {device_name} ] not found.")
+                    logger.error(e)
                     raise ComponentsSpecificationError()
-                except ImportError:
+                except ImportError as e:
                     logger.error(f"Error importing module for component [ {device_name} ].")
+                    logger.error(e)
                     raise ComponentsSpecificationError()
                 except FileNotFoundError:
                     logger.error(f"File not found for component [ {device_name} ].")

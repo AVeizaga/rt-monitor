@@ -7,6 +7,7 @@ import logging
 import signal
 import threading
 import wx
+import pika
 
 from rt_monitor.config import config
 from rt_monitor.errors.monitor_errors import FrameworkError
@@ -25,6 +26,14 @@ from rt_monitor.rabbitmq_server_configs import (
 )
 from rt_monitor.utility import is_valid_file_with_extension_nex, is_valid_file_with_extension
 
+from rt_monitor.rabbitmq_server_connections import rabbitmq_event_server_connection, rabbitmq_log_server_connection
+from rt_rabbitmq_wrapper.rabbitmq_utility import (
+    RabbitMQError,
+    connect_to_server,
+    connect_to_channel_exchange,
+    declare_queue,
+    publish_message,
+)
 
 def _run_verification(process_thread):
     # Starts the monitor thread
@@ -129,6 +138,45 @@ def main():
     # RabbitMQ exchange configuration
     rabbitmq_event_exchange_config.exchange = args.event_exchange
     rabbitmq_log_exchange_config.exchange = args.log_exchange
+
+    # Set up the connection to the RabbitMQ connection to server
+    try:
+        connection = connect_to_server(rabbitmq_server_config)
+    except RabbitMQError:
+        logger.critical(f"Error setting up the connection to the RabbitMQ server.")
+        exit(-2)
+    # Set up the RabbitMQ channel and exchange for events with the RabbitMQ server
+    try:
+        event_channel = connect_to_channel_exchange(rabbitmq_server_config, rabbitmq_event_exchange_config, connection)
+    except RabbitMQError:
+        logger.critical(f"Error setting up the channel and exchange at the RabbitMQ server.")
+        exit(-2)
+    # Set up the RabbitMQ queue and routing key for events with the RabbitMQ server
+    try:
+        event_queue_name = declare_queue(rabbitmq_server_config, rabbitmq_event_exchange_config, event_channel, 'events')
+    except RabbitMQError:
+        logger.critical(f"Error setting up the channel and exchange at the RabbitMQ server.")
+        exit(-2)
+    # Start getting events from the RabbitMQ server
+    logger.info(f"Start getting events from queue {event_queue_name} - exchange {rabbitmq_event_exchange_config.exchange} at RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}.")
+    # Set up connection for events with the RabbitMQ server
+    rabbitmq_event_server_connection.connection = connection
+    rabbitmq_event_server_connection.channel = event_channel
+    rabbitmq_event_server_connection.exchange = rabbitmq_event_exchange_config.exchange
+    rabbitmq_event_server_connection.queue_name = event_queue_name
+    # Set up the RabbitMQ channel and exchange for logger with the RabbitMQ server
+    try:
+        log_channel = connect_to_channel_exchange(rabbitmq_server_config, rabbitmq_log_exchange_config, connection)
+    except RabbitMQError:
+        logger.critical(f"Error setting up the channel and exchange at the RabbitMQ server.")
+        exit(-2)
+    # Set up connection for events with the RabbitMQ server
+    rabbitmq_log_server_connection.connection = connection
+    rabbitmq_log_server_connection.channel = log_channel
+    rabbitmq_log_server_connection.exchange = rabbitmq_log_exchange_config.exchange
+    # Start sending log entries to the RabbitMQ server with timeout handling for message reception
+    logger.info(f"Start sending log entries to the exchange {rabbitmq_log_exchange_config.exchange} at RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}.")
+
     # Other configuration
     config.timeout = timeout
     config.stop = args.stop
@@ -138,15 +186,47 @@ def main():
         monitor = monitor_builder.build_monitor()
     except FrameworkError:
         logger.critical(f"Runtime monitoring process ABORTED.")
+        exit(-1)
     else:
         # Creates a thread for controlling the analysis process
         application_thread = threading.Thread(
             target=_run_verification, args=[monitor]
         )
+        app = wx.App()
+        app.MainLoop()
         application_thread.start()
+        application_thread.join()
+
+        # Stop getting events from the RabbitMQ server
+        logger.info(f"Stop getting events from the RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}.")
+        # Send poison pill with the log_entries routing_key to the RabbitMQ server
+        try:
+            publish_message(
+                rabbitmq_log_server_connection,
+                'log_entries',
+                '',
+                pika.BasicProperties(
+                    delivery_mode=2,
+                    headers={'termination': True}
+                )
+            )
+        except RabbitMQError:
+            logger.info("Error sending with the log_entries routing_key to the RabbitMQ server.")
+            exit(-2)
+        else:
+            logger.info("Poison pill sent with the log_entries routing_key to the RabbitMQ server.")
+
+        logger.info(f"Stop publishing log entries to the RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}.")
+        # if poison_received or stop:
+        #     Monitor.log_analysis_statistics()
+        # Close connection to the RabbitMQ logging server if it exists
+        if connection and connection.is_open:
+            try:
+                connection.close()
+                logger.info(f"Connection to the RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port} closed.")
+            except Exception as e:
+                logger.error(f"Error closing connection to RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}: {e}.")
 
 
 if __name__ == "__main__":
-    app = wx.App()
     main()
-    app.MainLoop()

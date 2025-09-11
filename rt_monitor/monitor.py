@@ -36,14 +36,9 @@ from rt_rabbitmq_wrapper.rabbitmq_utility import (
     get_message,
     ack_message,
     publish_message,
-    connect_to_server,
-    connect_to_channel_exchange,
-    declare_queue
 )
 from rt_monitor.rabbitmq_server_configs import (
     rabbitmq_server_config,
-    rabbitmq_event_exchange_config,
-    rabbitmq_log_exchange_config
 )
 from rt_monitor.rabbitmq_server_connections import rabbitmq_event_server_connection, rabbitmq_log_server_connection
 from rt_monitor.framework.clock import Clock
@@ -109,43 +104,6 @@ class Monitor(threading.Thread):
             ComponentDoesNotExistError,
             ComponentError
         )
-        # Set up the connection to the RabbitMQ connection to server
-        try:
-            connection = connect_to_server(rabbitmq_server_config)
-        except RabbitMQError:
-            logger.critical(f"Error setting up the connection to the RabbitMQ server.")
-            exit(-2)
-        # Set up the RabbitMQ channel and exchange for events with the RabbitMQ server
-        try:
-            event_channel = connect_to_channel_exchange(rabbitmq_server_config, rabbitmq_event_exchange_config, connection)
-        except RabbitMQError:
-            logger.critical(f"Error setting up the channel and exchange at the RabbitMQ server.")
-            exit(-2)
-        # Set up the RabbitMQ queue and routing key for events with the RabbitMQ server
-        try:
-            event_queue_name = declare_queue(rabbitmq_server_config, rabbitmq_event_exchange_config, event_channel, 'events')
-        except RabbitMQError:
-            logger.critical(f"Error setting up the channel and exchange at the RabbitMQ server.")
-            exit(-2)
-        # Start getting events from the RabbitMQ server
-        logger.info(f"Start getting events from queue {event_queue_name} - exchange {rabbitmq_event_exchange_config.exchange} at RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}.")
-        # Set up connection for events with the RabbitMQ server
-        rabbitmq_event_server_connection.connection = connection
-        rabbitmq_event_server_connection.channel = event_channel
-        rabbitmq_event_server_connection.exchange = rabbitmq_event_exchange_config.exchange
-        rabbitmq_event_server_connection.queue_name = event_queue_name
-        # Set up the RabbitMQ channel and exchange for logger with the RabbitMQ server
-        try:
-            log_channel = connect_to_channel_exchange(rabbitmq_server_config, rabbitmq_log_exchange_config, connection)
-        except RabbitMQError:
-            logger.critical(f"Error setting up the channel and exchange at the RabbitMQ server.")
-            exit(-2)
-        # Set up connection for events with the RabbitMQ server
-        rabbitmq_log_server_connection.connection = connection
-        rabbitmq_log_server_connection.channel = log_channel
-        rabbitmq_log_server_connection.exchange = rabbitmq_log_exchange_config.exchange
-        # Start sending log entries to the RabbitMQ server with timeout handling for message reception
-        logger.info(f"Start sending log entries to the exchange {rabbitmq_log_exchange_config.exchange} at RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}.")
         # Initialize process state for the analysis
         self._current_state = self._framework.process().dfa().start_state
         # initialize last_message_time for testing timeout
@@ -223,26 +181,7 @@ class Monitor(threading.Thread):
                                     completed = True
                                 # Only increment number_of_events is it is a valid event (rules out poisson pill)
                                 number_of_events += 1
-        # Stop getting events from the RabbitMQ server
-        logger.info(f"Stop getting events from the RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}.")
-        # Send poison pill with the log_entries routing_key to the RabbitMQ server
-        try:
-            publish_message(
-                rabbitmq_log_server_connection,
-                'log_entries',
-                '',
-                pika.BasicProperties(
-                    delivery_mode=2,
-                    headers={'termination': True}
-                )
-            )
-        except RabbitMQError:
-            logger.info("Error sending with the log_entries routing_key to the RabbitMQ server.")
-            exit(-2)
-        else:
-            logger.info("Poison pill sent with the log_entries routing_key to the RabbitMQ server.")
-        # Stop publishing log entries to the RabbitMQ server
-        logger.info(f"Stop publishing log entries to the RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}.")
+
         # Logging the reason for stoping the verification process to the RabbitMQ server
         if poison_received:
             logger.info(f"Processed events: {number_of_events} - Time (secs.): {time.time()-start_time_epoch:.3f} - Process COMPLETED, poison pill received.")
@@ -254,16 +193,7 @@ class Monitor(threading.Thread):
             logger.info(f"Processed events: {number_of_events} - Time (secs.): {time.time()-start_time_epoch:.3f} - Process STOPPED, message reception timeout reached ({time.time()-last_message_time} secs.).")
         else:
             logger.info(f"Processed events: {number_of_events} - Time (secs.): {time.time()-start_time_epoch:.3f} - Process STOPPED, unknown reason.")
-        # Log analysis statistics only in normal termination (poison pill received or stop by user)
-        # if poison_received or stop:
-        #     Monitor.log_analysis_statistics()
-        # Close connection to the RabbitMQ logging server if it exists
-        if connection and connection.is_open:
-            try:
-                connection.close()
-                logger.info(f"Connection to the RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port} closed.")
-            except Exception as e:
-                logger.error(f"Error closing connection to RabbitMQ server at {rabbitmq_server_config.host}:{rabbitmq_server_config.port}: {e}.")
+
 
     # Raises: TaskDoesNotExistError()
     # Propagates: BuildSpecificationError() from _are_all_properties_satisfied

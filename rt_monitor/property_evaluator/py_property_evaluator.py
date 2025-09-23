@@ -158,7 +158,7 @@ class PyPropertyEvaluator(PropertyEvaluator):
             # The variable is of type dict, used for monitoring arrays whose dimension is unknown by the monitor
             if not all([isinstance(x, NoValue) for x in variable_value.values()]):
                 #assumption += f"{variable} = [None] * {max(map(int, variable_value.keys())) + 1}"
-                assumption += f"{variable} = [None] * {len(variable_value)}"
+                assumption += f"{variable} = [None] * {len(variable_value)}\n"
                 for key in variable_value:
                     # key if of the form [i0][i1]...[in]
                     assumption += f"{variable}{key} = {variable_value[key]}\n"

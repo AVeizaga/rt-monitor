@@ -44,6 +44,7 @@ class PyPropertyEvaluator(PropertyEvaluator):
         filename = prop.name()
         initial_analysis_time = time.time()
         locs = {}
+        logger.info("Evaluation spec is: %s", spec)
         exec(spec, globals(), locs)
         # The formula is checked to be either true or false
         result = locs['result']
@@ -159,6 +160,7 @@ class PyPropertyEvaluator(PropertyEvaluator):
                 for key in variable_value:
                     # key if of the form [i0][i1]...[in]
                     assumption += f"{variable}{key} = {variable_value[key]}\n"
+                    logger.info("Assumption is: %s", assumption)
         else:
             # The variable is of one of the basic types supported expressed with a string
             if not isinstance(variable_value, NoValue):
